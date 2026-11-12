@@ -8,9 +8,14 @@
 Replies type out letter by letter, with a blip for every letter.
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757?style=flat-square)](#install)
-[![macOS | Linux](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-262447?style=flat-square)](#requirements)
+[![macOS | Linux | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-262447?style=flat-square)](#requirements)
 [![MIT](https://img.shields.io/badge/license-MIT-262447?style=flat-square)](LICENSE)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=flat-square&logo=kofi&logoColor=white)](https://ko-fi.com/blipivwi)
+
+**Make Blip yours: every voice can be one the community made.**
+
+[![Browse the voices](https://img.shields.io/badge/%F0%9F%8E%A7_Browse_the_voices-blip.ivwi.fr-E07A4F?style=for-the-badge)](https://blip.ivwi.fr)
+[![Share your voice](https://img.shields.io/badge/%F0%9F%8E%A4_Share_your_voice-one_short_sound-262447?style=for-the-badge)](https://github.com/DoubleV840/blip-voices/issues/new?template=submit-voice.yml)
 
 </div>
 
@@ -23,6 +28,17 @@ In Claude Code:
 ```
 
 Then ask Claude anything, and listen.
+
+## Community voices
+
+Anyone can give Blip a new voice, and everyone can use it.
+
+| | |
+| --- | --- |
+| 🎧 **Listen** | Every voice plays on **[blip.ivwi.fr](https://blip.ivwi.fr)**, with search and themes. |
+| ⬇️ **Install** | `/blip voice <name>` in Claude Code, or pick one in the `/blip voice` menu. |
+| 🎤 **Share yours** | One short sound you made (`.wav`, `.mp3`, `.m4a`…), zipped, in [the form](https://github.com/DoubleV840/blip-voices/issues/new?template=submit-voice.yml), or type `/blip share`. Checked automatically, live within minutes. |
+| 🚩 **Report** | `/blip report <name>`: three reports remove a voice, everywhere. |
 
 ## Commands
 
@@ -46,7 +62,7 @@ Tab completes everything after `/blip`: options, voices, speeds. Send a message 
 
 `soft` (default) · `classic` · `nes` · `bubble` · `typewriter` · `robot` · `deep` · `chirp` · `critter`
 
-More from the community on **[blip.ivwi.fr](https://blip.ivwi.fr)**: listen, then `/blip voice <name>` installs one.
+Plus every [community voice](#community-voices).
 
 <details>
 <summary><b>How it works</b></summary>
@@ -65,7 +81,7 @@ More from the community on **[blip.ivwi.fr](https://blip.ivwi.fr)**: listen, the
 <br>
 
 - A recent Claude Code (tested on 2.1.322). Its plugin API is in early access and may change.
-- macOS, or Linux with `pw-play`, `paplay` or `aplay`. Windows is not supported yet.
+- macOS, Linux with `pw-play`, `paplay` or `aplay`, or Windows through PowerShell (new: [tell us](https://github.com/DoubleV840/blip/issues) how it sounds).
 - In the desktop app: **+** → **Plugins** → **Add marketplace** `DoubleV840/blip` → **Add plugin**.
 
 </details>

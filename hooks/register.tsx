@@ -43,11 +43,12 @@ type Reveal = {
   stop: AbortController
 }
 
-// How clips are played: the engine's own player (afplay on macOS), or a
-// command found on Linux, where the engine has none.
+// How clips are played: the engine's own player (afplay on macOS), a command
+// found on Linux, or PowerShell's on Windows, where the engine has none.
 type Player =
   | { kind: 'engine' }
   | { kind: 'command'; argv: (path: string, gain: number) => string[] }
+  | { kind: 'windows' }
 
 const STORE_KEY = 'settings'
 const CUSTOM = 'custom'
@@ -101,8 +102,19 @@ const CLAIM_MS = 10_000
 const RATE = 22050
 const BLIP_GAP_MS = 45
 const DETUNE = 0.35
-// afplay takes about this long to start: the text waits for its sound.
+// afplay takes about this long to start, PowerShell this long on Windows:
+// the text waits for its sound.
 const AUDIO_LEAD_MS = 60
+const WINDOWS_LEAD_MS = 400
+
+// Plays the WAV read as base64 from standard input. Windows' own player reads
+// WAV alone and has no volume: Blip mixes the volume into the sound.
+const WINDOWS_PLAY = [
+  '$bytes = [Convert]::FromBase64String([Console]::In.ReadToEnd())',
+  '$file = Join-Path $env:TEMP ("blip-" + [guid]::NewGuid() + ".wav")',
+  '[IO.File]::WriteAllBytes($file, $bytes)',
+  'try { (New-Object System.Media.SoundPlayer $file).PlaySync() } finally { Remove-Item $file -ErrorAction SilentlyContinue }',
+].join('; ')
 
 // Without the typewriter, a streamed piece blips over the time it stays the
 // newest text (MAX_WINDOW_MS at most), clip by clip.
@@ -199,6 +211,8 @@ async function save($: EngineInterface) {
 
 async function findPlayer($: EngineInterface): Promise<Player> {
   try {
+    if ((await $.env.get('OS')) === 'Windows_NT') return { kind: 'windows' }
+
     const os = await $.process.run(['uname', '-s'], { timeoutMs: 3000 })
     if (os.stdout.trim() !== 'Linux') return { kind: 'engine' }
 
@@ -335,7 +349,8 @@ function wavOf(samples: Float32Array): string {
 
 // Mixes blips into one track: each starts on its time, slightly detuned, and
 // is cut with a short fade where the next one starts.
-async function trackOf($: EngineInterface, blips: readonly Blip[], durationMs: number) {
+// `level` scales it, for a player with no volume of its own.
+async function trackOf($: EngineInterface, blips: readonly Blip[], durationMs: number, level = 1) {
   const length = Math.ceil(((durationMs + 400) * RATE) / 1000)
   const out = new Float32Array(length)
   const startOf = (blip: Blip | undefined) => (blip === undefined ? length : Math.round((blip.at * RATE) / 1000))
@@ -354,15 +369,24 @@ async function trackOf($: EngineInterface, blips: readonly Blip[], durationMs: n
       if (i + 1 >= samples.length) break
       const s = samples[i]! + (samples[i + 1]! - samples[i]!) * (at - i)
       const left = end - start - j
-      out[start + j] = left < fade ? (s * left) / fade : s
+      out[start + j] = (left < fade ? (s * left) / fade : s) * level
     }
   }
 
   return wavOf(out)
 }
 
+// The level a track is mixed at: the volume, where the player has none.
+const mixLevel = (gain: number) => (player.kind === 'windows' ? gain : 1)
+
 async function playTrack($: EngineInterface, wav: string, gain: number, signal?: AbortSignal) {
   if (gain <= 0) return
+
+  if (player.kind === 'windows') {
+    const argv = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', WINDOWS_PLAY]
+    await $.process.run(argv, { stdin: wav, timeoutMs: 60_000 })
+    return
+  }
 
   if (player.kind === 'command') {
     const play = player.argv('', gain).slice(0, -1)
@@ -376,6 +400,13 @@ async function playTrack($: EngineInterface, wav: string, gain: number, signal?:
 
 async function playClip($: EngineInterface, clip: Clip, gain: number, semitones = 0) {
   if (gain <= 0) return
+
+  // On Windows a clip is a track of its own: pitched and levelled here.
+  if (player.kind === 'windows') {
+    if (!isMixable(clip)) return
+    await playTrack($, wavOf(pitched(await samplesOf($, clip), semitones).map(s => s * gain)), gain)
+    return
+  }
 
   if ('voice' in clip) {
     const key = `${clip.voice}:${semitones}`
@@ -514,7 +545,8 @@ async function say($: EngineInterface, phrase: string, voiceName = settings.voic
     blips.forEach(b => playLater($, b.clip, gainOf(false), b.at, Math.round(b.detune)))
     return
   }
-  await playTrack($, await trackOf($, blips, times.at(-1) ?? 0), gainOf(false), signal)
+  const gain = gainOf(false)
+  await playTrack($, await trackOf($, blips, times.at(-1) ?? 0, mixLevel(gain)), gain, signal)
 }
 
 function speak($: EngineInterface, phrase: string, voiceName = settings.voice) {
@@ -533,16 +565,27 @@ function voicePiece($: EngineInterface, text: string, isQuiet: boolean) {
   const window = clamp(now - lastPieceAt, MIN_GAP_MS, MAX_WINDOW_MS)
   let free = nextBlipAt - now
 
+  const blips: Blip[] = []
   letters.forEach((letter, i) => {
     const at = (i * window) / letters.length
     if (at < free) return
     free = at + MIN_GAP_MS
     const note = noteFor(letter, isQuiet ? THINKING_DROP : 0)
-    playLater($, note.clip, gainOf(isQuiet), at, note.semitones)
+    blips.push({ at, clip: note.clip, detune: note.semitones })
   })
-
   lastPieceAt = now
   nextBlipAt = now + free
+
+  // Windows starts a player per sound, too slowly for a clip per letter: the
+  // piece's blips go as one track.
+  const gain = gainOf(isQuiet)
+  if (player.kind === 'windows' && blips.every(b => isMixable(b.clip))) {
+    void trackOf($, blips, window, gain)
+      .then(wav => playTrack($, wav, gain))
+      .catch(() => {})
+    return
+  }
+  blips.forEach(b => playLater($, b.clip, gain, b.at, b.detune))
 }
 
 // ---- The typewriter --------------------------------------------------------
@@ -587,8 +630,9 @@ function claim(id: string, text: string, kind: Reveal['kind'], isFirstOfReply: b
 async function begin($: EngineInterface, reveal: Reveal) {
   const blips = blipsOf(reveal.text, reveal.times)
   const canMix = blips.every(b => isMixable(b.clip))
-  const track = canMix ? await trackOf($, blips, reveal.times.at(-1) ?? 0).catch(() => undefined) : undefined
-  const lead = player.kind === 'engine' && settings.volume > 0 ? AUDIO_LEAD_MS : 0
+  const level = mixLevel(gainOf(false))
+  const track = canMix ? await trackOf($, blips, reveal.times.at(-1) ?? 0, level).catch(() => undefined) : undefined
+  const lead = settings.volume === 0 ? 0 : player.kind === 'engine' ? AUDIO_LEAD_MS : player.kind === 'windows' ? WINDOWS_LEAD_MS : 0
 
   if (track !== undefined) {
     void playTrack($, track, gainOf(false), reveal.stop.signal).catch(() => {})

@@ -39,8 +39,9 @@ function tone(): string {
 // Stands for the engine beneath the plugin: a macOS host, a store and a clock
 // in memory, voice files, and an audio player that records what it was asked
 // to play.
-function engine(on: On, stored: Record<string, unknown> = {}) {
+function engine(on: On, stored: Record<string, unknown> = {}, os: 'macOS' | 'Windows' = 'macOS') {
   const played: { clip: AudioClip; gain?: number }[] = []
+  const ran: { argv: readonly string[]; stdin?: string }[] = []
   const store = new Map(Object.entries(stored))
   const clock = mock.clock(on)
   const wav = tone()
@@ -54,9 +55,13 @@ function engine(on: On, stored: Record<string, unknown> = {}) {
   on('store.keys', () => ({ value: [...store.keys()] }))
   on('command.register', () => ({ value: { command: 'blip' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('process.run', () => ({
-    value: { exitCode: 0, stdout: 'Darwin\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
-  }))
+  on('env.get', (_, e) => ({ value: e.name === 'OS' && os === 'Windows' ? 'Windows_NT' : undefined }))
+  on('process.run', (_, e) => {
+    ran.push({ argv: e.argv, stdin: e.init?.stdin })
+    return {
+      value: { exitCode: 0, stdout: 'Darwin\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
@@ -74,7 +79,7 @@ function engine(on: On, stored: Record<string, unknown> = {}) {
     return { ...STEP, answer: 'Hello world', toolUses: [], stopReason: 'end_turn', usage: null }
   })
 
-  return { played, store, clock }
+  return { played, ran, store, clock }
 }
 
 async function streamed(step: AsyncIterable<TurnStepChunk>) {
@@ -348,4 +353,29 @@ test('Tab completes /blip options and their values', async ($, on) => {
   expect(await offered('/blip speed f')).toEqual(['fast'])
   expect(await offered('/blip thinking o')).toEqual(['on', 'off'])
   expect(await offered('hello wo')).toEqual([])
+})
+
+test('on Windows, a reply plays as one track through PowerShell', async ($, on) => {
+  const { played, ran, clock } = engine(on, {}, 'Windows')
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  await $.session.start(START)
+
+  expect(await streamed($.turn.step(STEP))).toBe('Hello world')
+  const row = await $.ui.mount({
+    plugin: 'blip',
+    surface: 'terminal',
+    component: 'AssistantMessage',
+    requestId: 'r1',
+    props: { text: 'Hello world', isFirstOfReply: true },
+  })
+  await clock.advance(2000)
+
+  const tracks = ran.filter(run => run.argv[0] === 'powershell.exe')
+  expect(tracks).toHaveLength(1)
+  expect(tracks[0]?.stdin?.startsWith('UklGR')).toBe(true) // base64 of "RIFF"
+  expect(played).toHaveLength(0)
+  await row.unmount()
 })
