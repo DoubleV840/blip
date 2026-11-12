@@ -119,7 +119,7 @@ test('bad values are refused with a hint', async ($, on) => {
   await $.session.start(START)
 
   expect((await blip($, 'volume loud')).text).toContain('0 to 100')
-  expect((await blip($, 'voice kazoo')).text).toContain('`critter`')
+  expect((await blip($, 'voice kazoo')).text).toContain('No voice named `kazoo`')
   expect((await blip($, 'dance')).text).toContain('/blip help')
 })
 
@@ -244,4 +244,40 @@ test('the command output is drawn as a dialogue box with aligned rows', async ($
   expect(await ui.find({ type: 'Text', text: '♪ Blip' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '/blip volume <0-100>' })).toBeDefined()
   await ui.unmount()
+})
+
+test('a community voice installs by name and is kept for the next session', async ($, on) => {
+  const { store, played, clock } = engine(on)
+  const catalog = {
+    voices: [
+      { name: 'classic', author: 'blip', description: 'built in', official: true },
+      { name: 'bloop', author: 'someone', description: 'a wet little bloop' },
+    ],
+  }
+  const fetched: string[] = []
+  on('http.fetch', (_, e) => {
+    fetched.push(e.url)
+    const text = e.url.endsWith('/catalog.json') ? JSON.stringify(catalog) : tone()
+    return { value: { status: 200, ok: true, headers: {}, text } }
+  })
+  await $.session.start(START)
+
+  expect((await blip($, 'voices')).text).toContain('`bloop`: a wet little bloop, by someone')
+  expect((await blip($, 'voice bloop')).text).toContain('Installed from the community')
+  expect(store.get('settings')).toMatchObject({ voice: 'bloop' })
+  expect(store.get('voice:bloop')).toEqual({ base64: tone() })
+  expect(fetched.some(url => url.endsWith('/voices/bloop/voice.txt'))).toBe(true)
+
+  // Its sample, pitched by Blip, plays as one track.
+  await clock.advance(1000)
+  expect(played.at(-1)?.clip).toMatchObject({ mime: 'audio/wav' })
+
+  expect((await blip($, 'voice nope')).text).toContain('No voice named `nope`')
+})
+
+test('/blip share points to the submission form', async ($, on) => {
+  engine(on)
+  await $.session.start(START)
+
+  expect((await blip($, 'share')).text).toContain('issues/new?template=submit-voice.yml')
 })

@@ -17,8 +17,12 @@ type Settings = {
   custom?: string
 }
 
-// A clip of the plugin's own (`asset`, under its folder) or the person's file.
-type Clip = { asset: string } | { path: string }
+// A clip of the plugin's own (`asset`, under its folder), the person's file,
+// or a community voice's one sample, pitched by Blip (`voice`).
+type Clip = { asset: string } | { path: string } | { voice: string }
+
+// A voice shared on the community site, as its catalog lists it.
+type CommunityVoice = { name: string; author: string; description: string }
 
 // One blip of a phrase: when it starts (ms), its clip, and a small random
 // detune (semitones) so no two sound quite alike.
@@ -48,6 +52,14 @@ type Player =
 const STORE_KEY = 'settings'
 const CUSTOM = 'custom'
 const VOICE_MENU = 'blip-voices'
+const CATALOG = { plugin: 'blip', key: 'catalog' } as const
+// The community voices: listed and served by the blip-voices repository,
+// shown on its site; a voice is one short sample, as base64 text.
+const SITE_URL = 'https://blip.ivwi.fr'
+const SHARE_URL = 'https://github.com/DoubleV840/blip-voices/issues/new?template=submit-voice.yml'
+const RAW_URL = 'https://raw.githubusercontent.com/DoubleV840/blip-voices/main'
+const VOICE_NAME = /^[a-z0-9][a-z0-9-]{1,19}$/
+const MAX_VOICE_SECONDS = 1
 const TYPING = { plugin: 'blip', key: 'typing' } as const
 const DONE = { plugin: 'blip', key: 'done' } as const
 const DEFAULTS: Settings = {
@@ -116,7 +128,9 @@ const HELP = [
   '- `/blip`: show the current settings',
   '- `/blip on · off`: turn the sounds on or off',
   '- `/blip voice`: pick a voice from a menu, ↑↓ to listen',
-  `- \`/blip voice <name>\`: switch directly: ${VOICES.map(v => v.name).join(', ')}`,
+  `- \`/blip voice <name>\`: switch directly: ${VOICES.map(v => v.name).join(', ')}, or a community voice`,
+  '- `/blip voices`: list every voice, the community\'s too',
+  '- `/blip share`: share your own voice with the community',
   '- `/blip speed <slow|normal|fast>`: how fast the text types out',
   '- `/blip typewriter on|off`: type replies out letter by letter, or show them as Claude writes',
   '- `/blip volume <0-100>`: how loud',
@@ -136,6 +150,10 @@ let player: Player = { kind: 'engine' }
 let lastPieceAt = 0
 let nextBlipAt = 0
 const samplesCache = new Map<string, { samples: Float32Array; rate: number }>()
+const pitchedCache = new Map<string, string>()
+// Community voices downloaded this session, as base64 WAV.
+const downloaded = new Map<string, string>()
+let isCatalogOffline = false
 let customBytes: { path: string; base64: string; mime: string } | undefined
 // Texts released to be typed out, waiting for their row to be drawn; the
 // texts typing out, oldest first; the frame timer while any is.
@@ -155,7 +173,8 @@ const signed = (n: number) => `${n > 0 ? '+' : ''}${n}`
 function normalize(raw: unknown): Settings {
   const stored = typeof raw === 'object' && raw !== null ? (raw as Partial<Settings>) : {}
   const s = { ...DEFAULTS, ...stored }
-  const isKnownVoice = s.voice === CUSTOM ? Boolean(s.custom) : voiceNamed(s.voice) !== undefined
+  // A community voice is checked against the store once the session starts.
+  const isKnownVoice = s.voice === CUSTOM ? Boolean(s.custom) : VOICE_NAME.test(String(s.voice))
 
   return {
     enabled: s.enabled !== false,
@@ -204,7 +223,11 @@ async function findPlayer($: EngineInterface): Promise<Player> {
 // ---- Sound -----------------------------------------------------------------
 
 const pathOf = ($: EngineInterface, clip: Clip) =>
-  'asset' in clip ? `${$.plugin.root}/${clip.asset}` : clip.path
+  'asset' in clip ? `${$.plugin.root}/${clip.asset}` : 'path' in clip ? clip.path : ''
+
+// Whether blips of this clip can be mixed into one track: any but a custom
+// sound that is no WAV.
+const isMixable = (clip: Clip) => !('path' in clip) || clip.path.toLowerCase().endsWith('.wav')
 
 function bytesOf(base64: string): Uint8Array {
   const text = atob(base64)
@@ -221,15 +244,28 @@ function base64Of(bytes: Uint8Array): string {
   return btoa(text)
 }
 
-// The samples of a 16-bit PCM WAV file, its channels mixed down.
+// The samples of a clip: a community voice from those loaded, a file from
+// disk, decoded once.
 async function samplesOf($: EngineInterface, clip: Clip) {
+  if ('voice' in clip) {
+    const loaded = samplesCache.get(`voice:${clip.voice}`)
+    if (loaded === undefined) throw new Error(`voice ${clip.voice} is not loaded`)
+    return loaded
+  }
+
   const path = pathOf($, clip)
   const cached = samplesCache.get(path)
   if (cached !== undefined) return cached
 
   const { base64 } = await $.fs.read(path, { as: 'bytes' })
-  const bytes = bytesOf(base64)
-  const view = new DataView(bytes.buffer)
+  const decoded = decodeWav(bytesOf(base64), path)
+  samplesCache.set(path, decoded)
+  return decoded
+}
+
+// The samples of a 16-bit PCM WAV file, its channels mixed down.
+function decodeWav(bytes: Uint8Array, label: string) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   let channels = 1
   let rate = RATE
   let bits = 16
@@ -243,7 +279,7 @@ async function samplesOf($: EngineInterface, clip: Clip) {
       rate = view.getUint32(offset + 12, true)
       bits = view.getUint16(offset + 22, true)
     } else if (id === 'data') {
-      if (bits !== 16) throw new Error(`${path}: ${bits}-bit audio, 16-bit expected`)
+      if (bits !== 16) throw new Error(`${label}: ${bits}-bit audio, 16-bit expected`)
       const frames = Math.floor(Math.min(size, bytes.length - offset - 8) / (2 * channels))
       const samples = new Float32Array(frames)
       for (let f = 0; f < frames; f++) {
@@ -251,14 +287,24 @@ async function samplesOf($: EngineInterface, clip: Clip) {
         for (let c = 0; c < channels; c++) sum += view.getInt16(offset + 8 + (f * channels + c) * 2, true)
         samples[f] = sum / channels / 32768
       }
-      const decoded = { samples, rate }
-      samplesCache.set(path, decoded)
-      return decoded
+      return { samples, rate }
     }
     offset += 8 + size + (size % 2)
   }
 
-  throw new Error(`${path}: no audio data`)
+  throw new Error(`${label}: no audio data`)
+}
+
+// Resamples to RATE, `semitones` higher or lower.
+function pitched({ samples, rate }: { samples: Float32Array; rate: number }, semitones: number) {
+  const step = (rate / RATE) * 2 ** (semitones / 12)
+  const out = new Float32Array(Math.max(1, Math.floor((samples.length - 1) / step)))
+  for (let j = 0; j < out.length; j++) {
+    const at = j * step
+    const i = Math.floor(at)
+    out[j] = (samples[i] ?? 0) + ((samples[i + 1] ?? 0) - (samples[i] ?? 0)) * (at - i)
+  }
+  return out
 }
 
 function wavOf(samples: Float32Array): string {
@@ -323,8 +369,19 @@ async function playTrack($: EngineInterface, wav: string, gain: number, signal?:
   await $.audio.play({ base64: wav, mime: 'audio/wav' }, signal ? { gain, signal } : { gain })
 }
 
-async function playClip($: EngineInterface, clip: Clip, gain: number) {
+async function playClip($: EngineInterface, clip: Clip, gain: number, semitones = 0) {
   if (gain <= 0) return
+
+  if ('voice' in clip) {
+    const key = `${clip.voice}:${semitones}`
+    let wav = pitchedCache.get(key)
+    if (wav === undefined) {
+      wav = wavOf(pitched(await samplesOf($, clip), semitones))
+      pitchedCache.set(key, wav)
+    }
+    await playTrack($, wav, gain)
+    return
+  }
 
   if (player.kind === 'command') {
     await $.process.run(player.argv(pathOf($, clip), gain), { timeoutMs: 5000 })
@@ -344,27 +401,35 @@ async function playClip($: EngineInterface, clip: Clip, gain: number) {
   await $.audio.play({ base64: customBytes.base64, mime: customBytes.mime }, { gain })
 }
 
-function playLater($: EngineInterface, clip: Clip, gain: number, delayMs: number) {
-  const play = () => void playClip($, clip, gain).catch(() => {})
+function playLater($: EngineInterface, clip: Clip, gain: number, delayMs: number, semitones = 0) {
+  const play = () => void playClip($, clip, gain, semitones).catch(() => {})
   if (delayMs <= 0) play()
   else $.clock.after(delayMs, play)
 }
 
-// The clip for one letter. Its note stays near the voice's own pitch, as a
-// voice does: a step or two from the letter, vowels a little higher, plus the
-// sentence's shape (`shift`) and the pitch setting.
-function clipFor(letter: string, shift: number, voiceName = settings.voice): Clip {
-  if (voiceName === CUSTOM && settings.custom) return { path: settings.custom }
+// The note for one letter. It stays near the voice's own pitch, as a voice
+// does: a step or two from the letter, vowels a little higher, plus the
+// sentence's shape (`shift`) and the pitch setting. A built-in voice has a
+// clip per note; a community voice's one sample is pitched by `semitones`.
+function noteFor(letter: string, shift: number, voiceName = settings.voice): { clip: Clip; semitones: number } {
+  if (voiceName === CUSTOM && settings.custom) return { clip: { path: settings.custom }, semitones: 0 }
 
-  const voice = voiceNamed(voiceName) ?? VOICES[0]!
+  const builtIn = voiceNamed(voiceName)
+  const isCommunity = builtIn === undefined && samplesCache.has(`voice:${voiceName}`)
+  const voice = builtIn ?? VOICES[0]!
+  const spread = isCommunity ? 4 : voice.spread
   const lower = letter.toLowerCase()
   const code = lower.codePointAt(0) ?? 0
   const vowel = 'aeiou'.indexOf(lower.normalize('NFD')[0] ?? '')
-  const variant = voice.isVowels && vowel >= 0 ? vowel : code % voice.variants
-  const move = Math.round((((code % 5) - 2) * voice.spread) / 5) + (vowel >= 0 ? 1 : 0)
-  const step = clamp(Math.floor(PITCH_STEPS / 2) + settings.pitch + move + shift, 0, PITCH_STEPS - 1)
+  const move = Math.round((((code % 5) - 2) * spread) / 5) + (vowel >= 0 ? 1 : 0)
 
-  return { asset: `sounds/${voice.name}/${variant}_${step}.wav` }
+  if (isCommunity) {
+    return { clip: { voice: voiceName }, semitones: clamp(settings.pitch + move + shift, -12, 12) }
+  }
+
+  const variant = voice.isVowels && vowel >= 0 ? vowel : code % voice.variants
+  const step = clamp(Math.floor(PITCH_STEPS / 2) + settings.pitch + move + shift, 0, PITCH_STEPS - 1)
+  return { clip: { asset: `sounds/${voice.name}/${variant}_${step}.wav` }, semitones: 0 }
 }
 
 // ---- Timing ----------------------------------------------------------------
@@ -426,7 +491,8 @@ function blipsOf(text: string, times: readonly number[], voiceName = settings.vo
     const tail = text.slice(i, i + 8)
     const isNearEnd = /[.!?]/.test(tail)
     const contour = !isNearEnd ? 0 : endings[i] === '?' ? QUESTION_LIFT : endings[i] === '.' ? -1 : 0
-    blips.push({ at, clip: clipFor(char, contour + shift, voiceName), detune: (Math.random() * 2 - 1) * DETUNE })
+    const note = noteFor(char, contour + shift, voiceName)
+    blips.push({ at, clip: note.clip, detune: note.semitones + (Math.random() * 2 - 1) * DETUNE })
   }
 
   return blips
@@ -437,10 +503,10 @@ function blipsOf(text: string, times: readonly number[], voiceName = settings.vo
 async function say($: EngineInterface, phrase: string, voiceName = settings.voice, signal?: AbortSignal) {
   const times = timelineOf(phrase, false)
   const blips = blipsOf(phrase, times, voiceName)
-  const canMix = blips.every(b => 'asset' in b.clip || b.clip.path.toLowerCase().endsWith('.wav'))
+  const canMix = blips.every(b => isMixable(b.clip))
 
   if (!canMix) {
-    blips.forEach(b => playLater($, b.clip, gainOf(false), b.at))
+    blips.forEach(b => playLater($, b.clip, gainOf(false), b.at, Math.round(b.detune)))
     return
   }
   await playTrack($, await trackOf($, blips, times.at(-1) ?? 0), gainOf(false), signal)
@@ -466,7 +532,8 @@ function voicePiece($: EngineInterface, text: string, isQuiet: boolean) {
     const at = (i * window) / letters.length
     if (at < free) return
     free = at + MIN_GAP_MS
-    playLater($, clipFor(letter, isQuiet ? THINKING_DROP : 0), gainOf(isQuiet), at)
+    const note = noteFor(letter, isQuiet ? THINKING_DROP : 0)
+    playLater($, note.clip, gainOf(isQuiet), at, note.semitones)
   })
 
   lastPieceAt = now
@@ -514,14 +581,14 @@ function claim(id: string, text: string, kind: Reveal['kind'], isFirstOfReply: b
 // Mixes the text's track, then starts it and the text together.
 async function begin($: EngineInterface, reveal: Reveal) {
   const blips = blipsOf(reveal.text, reveal.times)
-  const canMix = blips.every(b => 'asset' in b.clip || b.clip.path.toLowerCase().endsWith('.wav'))
+  const canMix = blips.every(b => isMixable(b.clip))
   const track = canMix ? await trackOf($, blips, reveal.times.at(-1) ?? 0).catch(() => undefined) : undefined
   const lead = player.kind === 'engine' && settings.volume > 0 ? AUDIO_LEAD_MS : 0
 
   if (track !== undefined) {
     void playTrack($, track, gainOf(false), reveal.stop.signal).catch(() => {})
   } else {
-    blips.forEach(b => playLater($, b.clip, gainOf(false), b.at + lead))
+    blips.forEach(b => playLater($, b.clip, gainOf(false), b.at + lead, Math.round(b.detune)))
   }
   reveal.startedAt = (await $.clock.now()) + lead
 }
@@ -597,10 +664,94 @@ function visibleOf(text: string, columns: number, rows: number): string {
   return shown
 }
 
+// ---- Community voices ------------------------------------------------------
+
+// The voices the community site lists, fetched once a session (and again
+// after a failure); kept in state so the voice menu draws them once in.
+async function catalogOf($: EngineInterface): Promise<CommunityVoice[]> {
+  const known = await $.state.get(CATALOG)
+  if (known.value) return known.value
+
+  const response = await $.http.fetch(`${RAW_URL}/catalog.json`)
+  if (!response.ok) throw new Error(`the community catalog answered ${response.status}`)
+
+  const listed = (JSON.parse(response.text) as { voices?: unknown[] }).voices ?? []
+  const voices = listed.flatMap(raw => {
+    const v = raw as Partial<CommunityVoice> & { official?: boolean }
+    const isValid = !v.official && typeof v.name === 'string' && VOICE_NAME.test(v.name) && !voiceNamed(v.name)
+    return isValid ? [{ name: v.name!, author: String(v.author ?? ''), description: String(v.description ?? '') }] : []
+  })
+  await $.state.set(CATALOG, voices)
+
+  return voices
+}
+
+// Loads a community voice into memory: from the store when it was installed
+// before, else downloaded (and, with `install`, stored for later sessions).
+async function loadVoice($: EngineInterface, name: string, install = false): Promise<boolean> {
+  if (samplesCache.has(`voice:${name}`)) {
+    if (install && (await $.store.get(`voice:${name}`)) === undefined) await storeVoice($, name)
+    return true
+  }
+
+  const stored = (await $.store.get(`voice:${name}`)) as { base64?: string } | undefined
+  let base64 = stored?.base64
+  if (base64 === undefined) {
+    const response = await $.http.fetch(`${RAW_URL}/voices/${name}/voice.txt`)
+    if (!response.ok) return false
+    base64 = response.text.trim()
+  }
+
+  const decoded = decodeWav(bytesOf(base64), name)
+  if (decoded.samples.length / decoded.rate > MAX_VOICE_SECONDS) throw new Error(`${name} is too long`)
+  samplesCache.set(`voice:${name}`, decoded)
+  downloaded.set(name, base64)
+  if (install && stored === undefined) await storeVoice($, name)
+
+  return true
+}
+
+async function storeVoice($: EngineInterface, name: string) {
+  const base64 = downloaded.get(name)
+  if (base64 !== undefined) await $.store.set(`voice:${name}`, { base64 })
+}
+
+// Switches to a voice by name: built in, or from the community (installed).
+async function useVoice($: EngineInterface, name: string): Promise<string> {
+  const builtIn = voiceNamed(name)
+  if (builtIn !== undefined) {
+    settings.voice = builtIn.name
+    await save($)
+    speak($, `Hi! I am ${builtIn.name}.`)
+    return `Voice: **${builtIn.name}**, ${builtIn.description}.`
+  }
+
+  // A community voice is one the catalog lists, or one installed before.
+  const voices = await catalogOf($).catch(() => [])
+  const shared = voices.find(v => v.name === name)
+  const isStored = VOICE_NAME.test(name) && (await $.store.get(`voice:${name}`)) !== undefined
+  if (shared === undefined && !isStored) {
+    return `No voice named \`${name}\`. Browse them all on ${SITE_URL}, or type \`/blip voice\` for the menu.`
+  }
+  if (!(await loadVoice($, name, true).catch(() => false))) {
+    return `Couldn't download \`${name}\` from ${SITE_URL}. Try again in a moment.`
+  }
+
+  settings.voice = name
+  await save($)
+  speak($, `Hi! I am ${name}.`)
+  return `Voice: **${name}**${shared ? `, ${shared.description}, by ${shared.author}` : ''}. Installed from the community.`
+}
+
 // ---- The /blip command -----------------------------------------------------
 
 function status() {
-  const voice = settings.voice === CUSTOM ? `custom (${settings.custom})` : settings.voice
+  const voice =
+    settings.voice === CUSTOM
+      ? `custom (${settings.custom})`
+      : voiceNamed(settings.voice) === undefined
+        ? `${settings.voice} (community)`
+        : settings.voice
   const parts = [
     `typewriter **${settings.typewriter ? settings.speed : 'off'}**`,
     `voice **${voice}**`,
@@ -612,12 +763,18 @@ function status() {
   return `Blip is **${settings.enabled ? 'on' : 'off'}** · ${parts.join(' · ')}\n\nType \`/blip help\` for every command.`
 }
 
-function voiceList() {
-  const rows = VOICES.map(
-    v => `- \`${v.name}\`: ${v.description}${v.name === settings.voice ? ' **(current)**' : ''}`,
-  )
+async function voiceList($: EngineInterface) {
+  const current = (name: string) => (name === settings.voice ? ' **(current)**' : '')
+  const builtIn = VOICES.map(v => `- \`${v.name}\`: ${v.description}${current(v.name)}`)
+  const shared = await catalogOf($).catch(() => undefined)
+  const community =
+    shared === undefined
+      ? [`Couldn't reach the community voices: see ${SITE_URL}.`]
+      : shared.length === 0
+        ? ['None yet: be the first with `/blip share`.']
+        : shared.map(v => `- \`${v.name}\`: ${v.description}, by ${v.author}${current(v.name)}`)
 
-  return ['Voices', '', ...rows, '', 'Switch with `/blip voice <name>`.'].join('\n')
+  return ['Voices', '', ...builtIn, '', 'Community', '', ...community, '', 'Switch with `/blip voice <name>`.'].join('\n')
 }
 
 function onOff(value: string): boolean | undefined {
@@ -627,11 +784,9 @@ function onOff(value: string): boolean | undefined {
 }
 
 async function chooseVoice($: EngineInterface, name: string) {
-  settings.voice = name
-  await save($)
   await $.ui.close({ id: VOICE_MENU })
-  $.ui.toast(`Blip voice: ${name}`)
-  speak($, 'Got it!')
+  await useVoice($, name)
+  $.ui.toast(`Blip voice: ${settings.voice}`)
 }
 
 async function openVoiceMenu($: EngineInterface): Promise<string> {
@@ -641,10 +796,16 @@ async function openVoiceMenu($: EngineInterface): Promise<string> {
     focus: true,
     closeOnEscape: true,
     holdToasts: true,
-    rows: VOICES.length + 3,
+    rows: VOICES.length + 12,
   })
+  if (!opened.isPlaced) return voiceList($)
 
-  return opened.isPlaced ? 'Pick a voice in the menu: ↑↓ to listen, Enter to choose, Esc to close.' : voiceList()
+  // The community's voices join the menu once fetched.
+  void catalogOf($).catch(async () => {
+    isCatalogOffline = true
+    await $.state.set(CATALOG, [])
+  })
+  return 'Pick a voice in the menu: ↑↓ to listen, Enter to choose, Esc to close.'
 }
 
 async function setCustom($: EngineInterface, value: string): Promise<string> {
@@ -694,15 +855,21 @@ async function run($: EngineInterface, args: string): Promise<string> {
     }
 
     case 'voice':
-    case 'voices': {
-      if (lower === '') return openVoiceMenu($)
-      const voice = voiceNamed(lower)
-      if (voice === undefined) return `No voice named \`${value}\`.\n\n${voiceList()}`
-      settings.voice = voice.name
-      await save($)
-      speak($, `Hi! I am ${voice.name}.`)
-      return `Voice: **${voice.name}**, ${voice.description}.`
-    }
+      return lower === '' ? openVoiceMenu($) : useVoice($, lower)
+
+    case 'voices':
+      return voiceList($)
+
+    case 'share':
+      return [
+        'Share your own voice with everyone:',
+        '',
+        '1. Make one short sound, under half a second, that is yours (or CC0).',
+        '2. Zip the .wav file.',
+        `3. Drop the zip in this form: ${SHARE_URL}`,
+        '',
+        `Once approved, it shows on ${SITE_URL} and in everyone's \`/blip voice\` menu.`,
+      ].join('\n')
 
     case 'speed': {
       if (lower === '') return `Text speed: **${settings.speed}** (slow, normal, fast).`
@@ -782,6 +949,12 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     settings = normalize(await $.store.get(STORE_KEY))
     player = await findPlayer($)
+    // A community voice comes from the store, or the default stands in.
+    if (settings.voice !== CUSTOM && voiceNamed(settings.voice) === undefined) {
+      const isStored = (await $.store.get(`voice:${settings.voice}`)) !== undefined
+      const isLoaded = isStored && (await loadVoice($, settings.voice).catch(() => false))
+      if (!isLoaded) settings.voice = DEFAULTS.voice
+    }
     await $.command.register({
       name: 'blip',
       description: 'RPG-style text sounds: /blip help for every option',
@@ -915,31 +1088,49 @@ export const register: Register = on => {
     )
   })
 
-  // The voice menu: one row per voice, its number as a hotkey.
-  on('ui.render', { component: 'Pane', requestId: 'blip-voices' }, ($, e) => {
+  // The voice menu: the built-in voices, their numbers as hotkeys, then the
+  // community's once fetched.
+  on('ui.render', { component: 'Pane', requestId: 'blip-voices' }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const width = Math.max(...VOICES.map(v => v.name.length)) + 2
+    const { value: shared } = await $.state.get(CATALOG)
+    const names = [...VOICES.map(v => v.name), ...(shared ?? []).map(v => v.name)]
+    const width = Math.max(...names.map(name => name.length)) + 2
+
+    const row = (name: string, description: string, hotkey?: string) => {
+      const isCurrent = name === settings.voice
+
+      return (
+        <Button
+          key={name}
+          plain
+          {...(hotkey ? { hotkey } : {})}
+          {...(isCurrent ? { autoFocus: true as const } : {})}
+          onPress={() => void chooseVoice($, name).catch(() => {})}
+        >
+          {name.padEnd(width)}
+          <Text dimColor>{description}</Text>
+          {isCurrent ? <Text color="claude"> ●</Text> : ''}
+        </Button>
+      )
+    }
 
     return (
       <Box flexDirection="column">
         <Text dimColor>↑↓ to listen · Enter to choose · Esc to close</Text>
-        {VOICES.map((voice, i) => {
-          const isCurrent = voice.name === settings.voice
-
-          return (
-            <Button
-              key={voice.name}
-              plain
-              hotkey={String(i + 1)}
-              {...(isCurrent ? { autoFocus: true as const } : {})}
-              onPress={() => void chooseVoice($, voice.name).catch(() => {})}
-            >
-              {voice.name.padEnd(width)}
-              <Text dimColor>{voice.description}</Text>
-              {isCurrent ? <Text color="claude"> ●</Text> : ''}
-            </Button>
-          )
-        })}
+        {VOICES.map((voice, i) => row(voice.name, voice.description, String(i + 1)))}
+        <Text> </Text>
+        <Text bold color="claude">
+          Community
+        </Text>
+        {shared === undefined || shared === null ? (
+          <Text dimColor>Loading the voices of {SITE_URL}…</Text>
+        ) : isCatalogOffline ? (
+          <Text dimColor>Couldn't reach {SITE_URL}.</Text>
+        ) : shared.length === 0 ? (
+          <Text dimColor>None yet: share yours with /blip share.</Text>
+        ) : (
+          shared.map(voice => row(voice.name, `${voice.description} · ${voice.author}`))
+        )}
       </Box>
     )
   })
@@ -947,8 +1138,15 @@ export const register: Register = on => {
   // Moving through the menu plays the voice under the cursor.
   on('ui.focus', { component: 'Pane', requestId: 'blip-voices' }, async ($, e, next) => {
     const moved = await next(e)
-    if (moved.deny === undefined && e.element !== undefined && voiceNamed(e.element)) {
-      speak($, 'Hello there!', e.element)
+    const name = e.element
+    if (moved.deny !== undefined || name === undefined) return moved
+
+    if (voiceNamed(name)) speak($, 'Hello there!', name)
+    // A community voice is downloaded to be heard, and kept only if chosen.
+    else if (VOICE_NAME.test(name)) {
+      void loadVoice($, name)
+        .then(isLoaded => isLoaded && speak($, 'Hello there!', name))
+        .catch(() => {})
     }
 
     return moved

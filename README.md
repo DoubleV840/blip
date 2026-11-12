@@ -12,8 +12,6 @@ Replies type out letter by letter, with a blip for every letter.
 [![MIT](https://img.shields.io/badge/license-MIT-262447?style=flat-square)](LICENSE)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?style=flat-square&logo=kofi&logoColor=white)](https://ko-fi.com/blipivwi)
 
-<!-- Demo video with sound goes here -->
-
 </div>
 
 ## Install
@@ -36,7 +34,8 @@ Then ask Claude anything, and listen.
 | `/blip pitch -12..12` | Higher or lower voice |
 | `/blip on · off` | Sound on or off |
 | `/blip typewriter on · off` | Letter by letter, or Claude Code's usual display |
-| `/blip custom <file.wav>` | Your own sound |
+| `/blip custom <file.wav>` | Your own sound, just for you |
+| `/blip share` | Share your sound with everyone |
 | `/blip test` | Demo |
 | `/blip help` | Everything else |
 
@@ -46,6 +45,8 @@ Send a message to skip the rest of a reply, like in a game.
 
 `classic` · `nes` · `soft` · `bubble` · `typewriter` · `robot` · `deep` · `chirp` · `critter`
 
+More from the community on **[blip.ivwi.fr](https://blip.ivwi.fr)**: listen, then `/blip voice <name>` installs one.
+
 <details>
 <summary><b>How it works</b></summary>
 <br>
@@ -53,7 +54,7 @@ Send a message to skip the rest of a reply, like in a game.
 - Claude's reply is held while it is written, then typed out above the prompt at 30 frames a second, and settles into the conversation once whole.
 - All the blips of a reply are mixed into one sound before it starts: each on its letter, never overlapping, slightly detuned.
 - Commas and sentence ends pause, spaces stay silent, questions rise.
-- Commands run locally: no model call, no tokens, no network.
+- Commands run locally: no model call, no tokens. Only community voices use the network, to download them.
 - Voices are synthesized from scratch by [`tools/make_sounds.py`](tools/make_sounds.py).
 
 </details>
@@ -69,8 +70,10 @@ Send a message to skip the rest of a reply, like in a game.
 </details>
 
 <details>
-<summary><b>Make your own voice</b></summary>
+<summary><b>Add a built-in voice (contributors)</b></summary>
 <br>
+
+For your own sound, `/blip custom` is enough, and `/blip share` puts it on the community site. Built-in voices are synthesized by a script:
 
 1. Add a voice to `VOICES` in [`tools/make_sounds.py`](tools/make_sounds.py).
 2. Run `python3 tools/make_sounds.py`.
