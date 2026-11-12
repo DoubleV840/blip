@@ -305,6 +305,31 @@ test('a voice removed from the community is deleted, and the default takes its p
   expect(store.get('settings')).toMatchObject({ voice: 'soft' })
 })
 
+test('a voice whose name a new voice took is downloaded afresh', async ($, on) => {
+  const { store, clock } = engine(on, { settings: { voice: 'bloop' }, 'voice:bloop': { base64: tone(), version: 'old' } })
+  on('store.delete', (_, e) => {
+    store.delete(e.key)
+    return { value: undefined }
+  })
+  const catalog = { voices: [{ name: 'bloop', author: 'someone else', description: 'a new bloop', version: 'new' }], removed: [] }
+  const fetched: string[] = []
+  on('http.fetch', (_, e) => {
+    fetched.push(e.url)
+    const text = e.url.includes('/catalog.json') ? JSON.stringify(catalog) : tone()
+    return { value: { status: 200, ok: true, headers: {}, text } }
+  })
+  await $.session.start(START)
+  await clock.advance(0) // the check the session started in the background
+
+  expect(fetched.filter(url => url.endsWith('/voices/bloop/voice.txt'))).toHaveLength(1)
+  expect(store.get('voice:bloop')).toEqual({ base64: tone(), version: 'new' })
+  expect(store.get('settings')).toMatchObject({ voice: 'bloop' })
+
+  // The same version again: nothing to download.
+  await blip($, 'voices')
+  expect(fetched.filter(url => url.endsWith('/voices/bloop/voice.txt'))).toHaveLength(1)
+})
+
 test('/blip report links the form for a community voice, never a built-in one', async ($, on) => {
   engine(on)
   await $.session.start(START)

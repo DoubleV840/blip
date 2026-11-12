@@ -2,8 +2,8 @@
 // of its characters show.
 export type BlipTyping = { id: string; shown: number } | null
 
-// A voice the community site lists.
-export type BlipCommunityVoice = { name: string; author: string; description: string }
+// A voice the community site lists, with a fingerprint of its sound.
+export type BlipCommunityVoice = { name: string; author: string; description: string; version: string }
 
 declare module 'claude-code' {
   interface PluginState {

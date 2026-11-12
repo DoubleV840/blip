@@ -21,8 +21,9 @@ type Settings = {
 // or a community voice's one sample, pitched by Blip (`voice`).
 type Clip = { asset: string } | { path: string } | { voice: string }
 
-// A voice shared on the community site, as its catalog lists it.
-type CommunityVoice = { name: string; author: string; description: string }
+// A voice shared on the community site, as its catalog lists it; `version`
+// is a fingerprint of its sound, new when a name is taken by a new voice.
+type CommunityVoice = { name: string; author: string; description: string; version: string }
 
 // One blip of a phrase: when it starts (ms), its clip, and a small random
 // detune (semitones) so no two sound quite alike.
@@ -60,9 +61,10 @@ const SITE_URL = 'https://blip.ivwi.fr'
 const SHARE_URL = 'https://github.com/DoubleV840/blip-voices/issues/new?template=submit-voice.yml'
 const REPORT_URL = 'https://github.com/DoubleV840/blip-voices/issues/new?template=report-voice.yml'
 const RAW_URL = 'https://raw.githubusercontent.com/DoubleV840/blip-voices/main'
-// The same catalog through GitHub's API: a minute old at most where the raw
-// file can be five, but sixty reads an hour per address.
-const API_CATALOG_URL = 'https://api.github.com/repos/DoubleV840/blip-voices/contents/catalog.json'
+// The same files through GitHub's API: a minute old at most where the raw
+// ones can be five, but sixty reads an hour per address.
+const API_URL = 'https://api.github.com/repos/DoubleV840/blip-voices/contents'
+const API_CATALOG_URL = `${API_URL}/catalog.json`
 const VOICE_NAME = /^[a-z0-9][a-z0-9-]{1,19}$/
 const MAX_VOICE_SECONDS = 1
 const TYPING = { plugin: 'blip', key: 'typing' } as const
@@ -740,10 +742,12 @@ async function catalogOf($: EngineInterface, fresh = false): Promise<CommunityVo
   const voices = (catalog.voices ?? []).flatMap(raw => {
     const v = raw as Partial<CommunityVoice> & { official?: boolean }
     const isValid = !v.official && typeof v.name === 'string' && VOICE_NAME.test(v.name) && !voiceNamed(v.name)
-    return isValid ? [{ name: v.name!, author: String(v.author ?? ''), description: String(v.description ?? '') }] : []
+    if (!isValid) return []
+    return [{ name: v.name!, author: String(v.author ?? ''), description: String(v.description ?? ''), version: String(v.version ?? '') }]
   })
   await $.state.set(CATALOG, voices)
   await forgetRemoved($, (catalog.removed ?? []).filter((n): n is string => typeof n === 'string' && VOICE_NAME.test(n)))
+  await renewChanged($, voices)
 
   return voices
 }
@@ -753,10 +757,7 @@ async function catalogOf($: EngineInterface, fresh = false): Promise<CommunityVo
 async function forgetRemoved($: EngineInterface, names: readonly string[]) {
   for (const name of names) {
     if ((await $.store.get(`voice:${name}`)) === undefined && !samplesCache.has(`voice:${name}`)) continue
-    await $.store.delete(`voice:${name}`)
-    samplesCache.delete(`voice:${name}`)
-    downloaded.delete(name)
-    for (const key of pitchedCache.keys()) if (key.startsWith(`${name}:`)) pitchedCache.delete(key)
+    await forget($, name)
 
     if (settings.voice === name) {
       settings.voice = DEFAULTS.voice
@@ -764,6 +765,29 @@ async function forgetRemoved($: EngineInterface, names: readonly string[]) {
       $.ui.toast(`Blip: the voice ${name} was removed from the community, back to ${DEFAULTS.voice}.`)
     }
   }
+}
+
+// An installed voice whose sound changed (its name taken again by a new
+// voice) is dropped, and downloaded afresh if in use.
+async function renewChanged($: EngineInterface, voices: readonly CommunityVoice[]) {
+  const installed = await installedVoices($)
+  for (const voice of voices) {
+    if (!installed.has(voice.name)) continue
+    const stored = (await $.store.get(`voice:${voice.name}`)) as { version?: string } | undefined
+    if ((stored?.version ?? '') === voice.version) continue
+    await forget($, voice.name)
+    if (settings.voice === voice.name && !(await loadVoice($, voice.name, true).catch(() => false))) {
+      settings.voice = DEFAULTS.voice
+      await save($)
+    }
+  }
+}
+
+async function forget($: EngineInterface, name: string) {
+  await $.store.delete(`voice:${name}`)
+  samplesCache.delete(`voice:${name}`)
+  downloaded.delete(name)
+  for (const key of pitchedCache.keys()) if (key.startsWith(`${name}:`)) pitchedCache.delete(key)
 }
 
 // Loads a community voice into memory: from the store when it was installed
@@ -777,7 +801,12 @@ async function loadVoice($: EngineInterface, name: string, install = false): Pro
   const stored = (await $.store.get(`voice:${name}`)) as { base64?: string } | undefined
   let base64 = stored?.base64
   if (base64 === undefined) {
-    const response = await $.http.fetch(`${RAW_URL}/voices/${name}/voice.txt`)
+    // Through the API first, as fresh as the catalog that named it.
+    const path = `voices/${name}/voice.txt`
+    let response = await $.http
+      .fetch(`${API_URL}/${path}`, { headers: { Accept: 'application/vnd.github.raw' } })
+      .catch(() => undefined)
+    if (!response?.ok) response = await $.http.fetch(`${RAW_URL}/${path}`)
     if (!response.ok) return false
     base64 = response.text.trim()
   }
@@ -791,9 +820,12 @@ async function loadVoice($: EngineInterface, name: string, install = false): Pro
   return true
 }
 
+// Kept with the version the catalog gives it, to notice when it changes.
 async function storeVoice($: EngineInterface, name: string) {
   const base64 = downloaded.get(name)
-  if (base64 !== undefined) await $.store.set(`voice:${name}`, { base64 })
+  if (base64 === undefined) return
+  const listed = ((await $.state.get(CATALOG)).value ?? []).find(v => v.name === name)
+  await $.store.set(`voice:${name}`, { base64, ...(listed?.version ? { version: listed.version } : {}) })
 }
 
 // Switches to a voice by name: built in, or from the community (installed).
