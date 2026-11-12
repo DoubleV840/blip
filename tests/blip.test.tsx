@@ -51,6 +51,7 @@ function engine(on: On, stored: Record<string, unknown> = {}) {
     store.set(e.key, e.value)
     return { value: undefined }
   })
+  on('store.keys', () => ({ value: [...store.keys()] }))
   on('command.register', () => ({ value: { command: 'blip' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('process.run', () => ({
@@ -257,7 +258,7 @@ test('a community voice installs by name and is kept for the next session', asyn
   const fetched: string[] = []
   on('http.fetch', (_, e) => {
     fetched.push(e.url)
-    const text = e.url.endsWith('/catalog.json') ? JSON.stringify(catalog) : tone()
+    const text = e.url.includes('/catalog.json') ? JSON.stringify(catalog) : tone()
     return { value: { status: 200, ok: true, headers: {}, text } }
   })
   await $.session.start(START)
@@ -305,4 +306,25 @@ test('/blip report links the form for a community voice, never a built-in one', 
 
   expect((await blip($, 'report bloop')).text).toContain('template=report-voice.yml&title=Report%3A%20bloop&voice=bloop')
   expect((await blip($, 'report classic')).text).toContain('Only community voices')
+})
+
+test('/blip voices marks installed voices and reads the catalog afresh', async ($, on) => {
+  const { store } = engine(on, { 'voice:bloop': { base64: tone() } })
+  const catalog = { voices: [{ name: 'bloop', author: 'someone', description: 'a wet little bloop' }] }
+  const urls: string[] = []
+  on('http.fetch', (_, e) => {
+    urls.push(e.url)
+    const text = e.url.includes('/catalog.json') ? JSON.stringify(catalog) : tone()
+    return { value: { status: 200, ok: true, headers: {}, text } }
+  })
+  await $.session.start(START)
+
+  const first = (await blip($, 'voices')).text
+  expect(first).toContain('`bloop`: a wet little bloop, by someone **(installed)**')
+
+  // Published since: the next listing has it, read through the API.
+  catalog.voices.push({ name: 'zap', author: 'other', description: 'a zap' })
+  expect((await blip($, 'voices')).text).toContain('`zap`: a zap, by other')
+  expect(urls.filter(url => url.startsWith('https://api.github.com/'))).toHaveLength(2)
+  expect(store.has('voice:zap')).toBe(false)
 })

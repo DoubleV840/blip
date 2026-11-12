@@ -59,6 +59,9 @@ const SITE_URL = 'https://blip.ivwi.fr'
 const SHARE_URL = 'https://github.com/DoubleV840/blip-voices/issues/new?template=submit-voice.yml'
 const REPORT_URL = 'https://github.com/DoubleV840/blip-voices/issues/new?template=report-voice.yml'
 const RAW_URL = 'https://raw.githubusercontent.com/DoubleV840/blip-voices/main'
+// The same catalog through GitHub's API: a minute old at most where the raw
+// file can be five, but sixty reads an hour per address.
+const API_CATALOG_URL = 'https://api.github.com/repos/DoubleV840/blip-voices/contents/catalog.json'
 const VOICE_NAME = /^[a-z0-9][a-z0-9-]{1,19}$/
 const MAX_VOICE_SECONDS = 1
 const TYPING = { plugin: 'blip', key: 'typing' } as const
@@ -668,14 +671,26 @@ function visibleOf(text: string, columns: number, rows: number): string {
 
 // ---- Community voices ------------------------------------------------------
 
-// The voices the community site lists, fetched once a session (and again
-// after a failure); kept in state so the voice menu draws them once in.
-async function catalogOf($: EngineInterface): Promise<CommunityVoice[]> {
+// The voices the community site lists. Fetched afresh with `fresh` (through
+// the API, so a voice published a minute ago shows), else once a session;
+// the last list stands in when the network fails.
+async function catalogOf($: EngineInterface, fresh = false): Promise<CommunityVoice[]> {
   const known = await $.state.get(CATALOG)
-  if (known.value) return known.value
+  if (known.value && !isCatalogOffline && !fresh) return known.value
 
-  const response = await $.http.fetch(`${RAW_URL}/catalog.json`)
-  if (!response.ok) throw new Error(`the community catalog answered ${response.status}`)
+  let response
+  try {
+    const raw = () => $.http.fetch(`${RAW_URL}/catalog.json`)
+    response = fresh
+      ? await $.http.fetch(API_CATALOG_URL, { headers: { Accept: 'application/vnd.github.raw' } })
+      : await raw()
+    if (!response.ok && fresh) response = await raw()
+    if (!response.ok) throw new Error(`the community catalog answered ${response.status}`)
+  } catch (error) {
+    if (known.value && !isCatalogOffline) return known.value
+    throw error
+  }
+  isCatalogOffline = false
 
   const catalog = JSON.parse(response.text) as { voices?: unknown[]; removed?: unknown[] }
   const voices = (catalog.voices ?? []).flatMap(raw => {
@@ -747,8 +762,10 @@ async function useVoice($: EngineInterface, name: string): Promise<string> {
     return `Voice: **${builtIn.name}**, ${builtIn.description}.`
   }
 
-  // A community voice is one the catalog lists, or one installed before.
-  const voices = await catalogOf($).catch(() => [])
+  // A community voice is one the catalog lists (looked up afresh if this
+  // session's list lacks it), or one installed before.
+  let voices = await catalogOf($).catch(() => [] as CommunityVoice[])
+  if (!voices.some(v => v.name === name)) voices = await catalogOf($, true).catch(() => voices)
   const shared = voices.find(v => v.name === name)
   const isStored = VOICE_NAME.test(name) && (await $.store.get(`voice:${name}`)) !== undefined
   if (shared === undefined && !isStored) {
@@ -784,16 +801,27 @@ function status() {
   return `Blip is **${settings.enabled ? 'on' : 'off'}** · ${parts.join(' · ')}\n\nType \`/blip help\` for every command.`
 }
 
+// The community voices installed on this machine, by name.
+async function installedVoices($: EngineInterface): Promise<Set<string>> {
+  const keys = await $.store.keys()
+  return new Set(keys.filter(key => key.startsWith('voice:')).map(key => key.slice('voice:'.length)))
+}
+
 async function voiceList($: EngineInterface) {
-  const current = (name: string) => (name === settings.voice ? ' **(current)**' : '')
-  const builtIn = VOICES.map(v => `- \`${v.name}\`: ${v.description}${current(v.name)}`)
-  const shared = await catalogOf($).catch(() => undefined)
+  const installed = await installedVoices($)
+  const mark = (name: string) =>
+    name === settings.voice ? ' **(current)**' : installed.has(name) ? ' **(installed)**' : ''
+  const builtIn = VOICES.map(v => `- \`${v.name}\`: ${v.description}${mark(v.name)}`)
+  const shared = await catalogOf($, true).catch(() => undefined)
   const community =
     shared === undefined
-      ? [`Couldn't reach the community voices: see ${SITE_URL}.`]
+      ? [
+          `Couldn't reach the community voices: see ${SITE_URL}.`,
+          ...[...installed].map(name => `- \`${name}\`${mark(name)}`),
+        ]
       : shared.length === 0
         ? ['None yet: be the first with `/blip share`.']
-        : shared.map(v => `- \`${v.name}\`: ${v.description}, by ${v.author}${current(v.name)}`)
+        : shared.map(v => `- \`${v.name}\`: ${v.description}, by ${v.author}${mark(v.name)}`)
 
   return ['Voices', '', ...builtIn, '', 'Community', '', ...community, '', 'Switch with `/blip voice <name>`.'].join('\n')
 }
@@ -821,8 +849,8 @@ async function openVoiceMenu($: EngineInterface): Promise<string> {
   })
   if (!opened.isPlaced) return voiceList($)
 
-  // The community's voices join the menu once fetched.
-  void catalogOf($).catch(async () => {
+  // The community's voices join the menu once fetched, afresh each time.
+  void catalogOf($, true).catch(async () => {
     isCatalogOffline = true
     await $.state.set(CATALOG, [])
   })
@@ -1125,6 +1153,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: 'blip-voices' }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const { value: shared } = await $.state.get(CATALOG)
+    const installed = await installedVoices($)
     const names = [...VOICES.map(v => v.name), ...(shared ?? []).map(v => v.name)]
     const width = Math.max(...names.map(name => name.length)) + 2
 
@@ -1161,7 +1190,9 @@ export const register: Register = on => {
         ) : shared.length === 0 ? (
           <Text dimColor>None yet: share yours with /blip share.</Text>
         ) : (
-          shared.map(voice => row(voice.name, `${voice.description} · ${voice.author}`))
+          shared.map(voice =>
+            row(voice.name, `${voice.description} · ${voice.author}${installed.has(voice.name) ? ' · installed' : ''}`),
+          )
         )}
       </Box>
     )
