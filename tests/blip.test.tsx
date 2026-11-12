@@ -298,3 +298,11 @@ test('a voice removed from the community is deleted, and the default takes its p
   expect(store.has('voice:bloop')).toBe(false)
   expect(store.get('settings')).toMatchObject({ voice: 'classic' })
 })
+
+test('/blip report links the form for a community voice, never a built-in one', async ($, on) => {
+  engine(on)
+  await $.session.start(START)
+
+  expect((await blip($, 'report bloop')).text).toContain('template=report-voice.yml&title=Report%3A%20bloop&voice=bloop')
+  expect((await blip($, 'report classic')).text).toContain('Only community voices')
+})

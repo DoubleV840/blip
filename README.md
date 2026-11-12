@@ -36,6 +36,7 @@ Then ask Claude anything, and listen.
 | `/blip typewriter on · off` | Letter by letter, or Claude Code's usual display |
 | `/blip custom <file.wav>` | Your own sound, just for you |
 | `/blip share` | Share your sound with everyone |
+| `/blip report <name>` | Report a community voice |
 | `/blip test` | Demo |
 | `/blip help` | Everything else |
 

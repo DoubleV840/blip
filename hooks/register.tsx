@@ -57,6 +57,7 @@ const CATALOG = { plugin: 'blip', key: 'catalog' } as const
 // shown on its site; a voice is one short sample, as base64 text.
 const SITE_URL = 'https://blip.ivwi.fr'
 const SHARE_URL = 'https://github.com/DoubleV840/blip-voices/issues/new?template=submit-voice.yml'
+const REPORT_URL = 'https://github.com/DoubleV840/blip-voices/issues/new?template=report-voice.yml'
 const RAW_URL = 'https://raw.githubusercontent.com/DoubleV840/blip-voices/main'
 const VOICE_NAME = /^[a-z0-9][a-z0-9-]{1,19}$/
 const MAX_VOICE_SECONDS = 1
@@ -131,6 +132,7 @@ const HELP = [
   `- \`/blip voice <name>\`: switch directly: ${VOICES.map(v => v.name).join(', ')}, or a community voice`,
   '- `/blip voices`: list every voice, the community\'s too',
   '- `/blip share`: share your own voice with the community',
+  '- `/blip report [name]`: report a community voice that shouldn\'t be there',
   '- `/blip speed <slow|normal|fast>`: how fast the text types out',
   '- `/blip typewriter on|off`: type replies out letter by letter, or show them as Claude writes',
   '- `/blip volume <0-100>`: how loud',
@@ -884,11 +886,20 @@ async function run($: EngineInterface, args: string): Promise<string> {
         'Share your own voice with everyone:',
         '',
         '1. Make one short sound, under half a second, that is yours (or CC0).',
-        '2. Zip it: .wav, .mp3, .m4a, .ogg, .flac… any audio file works.',
+        '2. Zip it: .wav, .mp3, .m4a, .ogg, .flac… any sound file, no videos.',
         `3. Drop the zip in this form: ${SHARE_URL}`,
         '',
-        `Once approved, it shows on ${SITE_URL} and in everyone's \`/blip voice\` menu.`,
+        `It is checked automatically and goes live within minutes on ${SITE_URL} and in everyone's \`/blip voice\` menu.`,
       ].join('\n')
+
+    case 'report': {
+      const name = lower || settings.voice
+      if (voiceNamed(name) !== undefined || name === CUSTOM || !VOICE_NAME.test(name)) {
+        return 'Only community voices can be reported: `/blip report <name>`.'
+      }
+      const url = `${REPORT_URL}&title=${encodeURIComponent(`Report: ${name}`)}&voice=${encodeURIComponent(name)}`
+      return `Report \`${name}\` here: ${url}\n\nThree reports from different people remove a voice, everywhere.`
+    }
 
     case 'speed': {
       if (lower === '') return `Text speed: **${settings.speed}** (slow, normal, fast).`
