@@ -907,7 +907,7 @@ async function run($: EngineInterface, args: string): Promise<string> {
       return lower === '' ? openVoiceMenu($) : useVoice($, lower)
 
     case 'voices':
-      return voiceList($)
+      return lower === '' ? voiceList($) : useVoice($, lower)
 
     case 'share':
       return [
@@ -999,6 +999,53 @@ async function run($: EngineInterface, args: string): Promise<string> {
     default:
       return `Unknown option \`${word}\`. Type \`/blip help\` for the list.`
   }
+}
+
+// ---- Completion ------------------------------------------------------------
+
+// What Tab offers after `/blip `: each option, then each option's values.
+const OPTIONS: readonly [string, string][] = [
+  ['voice', 'pick a voice, or name one'],
+  ['voices', 'list every voice'],
+  ['speed', 'how fast the text types out'],
+  ['volume', 'how loud, 0 to 100'],
+  ['pitch', 'higher or lower, -12 to 12'],
+  ['on', 'sounds on'],
+  ['off', 'sounds off'],
+  ['typewriter', 'letter by letter, on or off'],
+  ['thinking', 'blip while Claude thinks, on or off'],
+  ['custom', 'your own sound file'],
+  ['share', 'share your voice with everyone'],
+  ['report', 'report a community voice'],
+  ['test', 'play a short demo'],
+  ['reset', 'back to the defaults'],
+  ['help', 'every command'],
+]
+const ON_OFF: readonly [string, string][] = [
+  ['on', ''],
+  ['off', ''],
+]
+
+async function completions($: EngineInterface, words: readonly string[]): Promise<[string, string][]> {
+  if (words.length === 2) return [...OPTIONS]
+
+  const option = words[1]!.toLowerCase()
+  if (words.length !== 3) return []
+  if (option === 'speed') return Object.keys(SPEEDS).map(speed => [speed, ''])
+  if (option === 'typewriter' || option === 'thinking') return [...ON_OFF]
+  if (option === 'custom') return [['off', 'back to your voice']]
+  if (option !== 'voice' && option !== 'voices' && option !== 'report') return []
+
+  // The community's names come from this session's catalog, fetched in the
+  // background the first time so the next keystroke has them.
+  const { value: shared } = await $.state.get(CATALOG)
+  if (shared === undefined) void catalogOf($).catch(() => {})
+  const installed = await installedVoices($)
+  const community = new Map((shared ?? []).map(v => [v.name, `${v.description} · ${v.author}`]))
+  for (const name of installed) if (!community.has(name)) community.set(name, 'installed')
+
+  const builtIn: [string, string][] = VOICES.map(v => [v.name, v.description])
+  return option === 'report' ? [...community] : [...builtIn, ...community]
 }
 
 // ---- Hooks -----------------------------------------------------------------
@@ -1102,6 +1149,19 @@ export const register: Register = on => {
         </Box>
       </Box>
     )
+  })
+
+  // Tab completes `/blip`'s options and their values: the voices, the speeds…
+  on('prompt.autocomplete', async ($, e, next) => {
+    const words = e.text.slice(0, e.cursor).trimStart().split(/\s+/)
+    if (words[0] !== '/blip' || words.length < 2) return next(e)
+
+    const token = e.token.toLowerCase()
+    const own = (await completions($, words))
+      .filter(([value]) => value.startsWith(token))
+      .map(([value, description]) => (description ? { text: value, description } : { text: value }))
+    const { suggestions } = await next(e)
+    return { suggestions: [...own, ...suggestions] }
   })
 
   // A new message skips what is still typing out.

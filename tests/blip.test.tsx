@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import type { AudioClip, On, TurnStepChunk } from 'claude-code'
+import type { AudioClip, On, PromptAutocompleteInput, PromptAutocompleteResult, TurnStepChunk } from 'claude-code'
 
 const STEP = { turnId: 't1', index: 0, model: 'claude', messageCount: 1 } as const
 const START = { cwd: '/', surface: 'terminal', isInteractive: true } as const
@@ -327,4 +327,25 @@ test('/blip voices marks installed voices and reads the catalog afresh', async (
   expect((await blip($, 'voices')).text).toContain('`zap`: a zap, by other')
   expect(urls.filter(url => url.startsWith('https://api.github.com/'))).toHaveLength(2)
   expect(store.has('voice:zap')).toBe(false)
+})
+
+test('Tab completes /blip options and their values', async ($, on) => {
+  engine(on)
+  on('prompt.autocomplete', () => ({ suggestions: [] }))
+  await $.session.start(START)
+  // The kit raises the event, though its types leave this call out.
+  const prompt = $.prompt as unknown as {
+    autocomplete: (input: PromptAutocompleteInput) => Promise<PromptAutocompleteResult>
+  }
+  const offered = async (text: string) => {
+    const token = text.split(/\s+/).at(-1) ?? ''
+    const { suggestions } = await prompt.autocomplete({ text, cursor: text.length, token, start: text.length - token.length })
+    return suggestions.map(s => s.text)
+  }
+
+  expect(await offered('/blip vo')).toEqual(['voice', 'voices', 'volume'])
+  expect(await offered('/blip voice ty')).toEqual(['typewriter'])
+  expect(await offered('/blip speed f')).toEqual(['fast'])
+  expect(await offered('/blip thinking o')).toEqual(['on', 'off'])
+  expect(await offered('hello wo')).toEqual([])
 })

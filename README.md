@@ -40,7 +40,7 @@ Then ask Claude anything, and listen.
 | `/blip test` | Demo |
 | `/blip help` | Everything else |
 
-Send a message to skip the rest of a reply, like in a game.
+Tab completes everything after `/blip`: options, voices, speeds. Send a message to skip the rest of a reply, like in a game.
 
 ## Voices
 
