@@ -675,15 +675,34 @@ async function catalogOf($: EngineInterface): Promise<CommunityVoice[]> {
   const response = await $.http.fetch(`${RAW_URL}/catalog.json`)
   if (!response.ok) throw new Error(`the community catalog answered ${response.status}`)
 
-  const listed = (JSON.parse(response.text) as { voices?: unknown[] }).voices ?? []
-  const voices = listed.flatMap(raw => {
+  const catalog = JSON.parse(response.text) as { voices?: unknown[]; removed?: unknown[] }
+  const voices = (catalog.voices ?? []).flatMap(raw => {
     const v = raw as Partial<CommunityVoice> & { official?: boolean }
     const isValid = !v.official && typeof v.name === 'string' && VOICE_NAME.test(v.name) && !voiceNamed(v.name)
     return isValid ? [{ name: v.name!, author: String(v.author ?? ''), description: String(v.description ?? '') }] : []
   })
   await $.state.set(CATALOG, voices)
+  await forgetRemoved($, (catalog.removed ?? []).filter((n): n is string => typeof n === 'string' && VOICE_NAME.test(n)))
 
   return voices
+}
+
+// A voice the maintainers removed from the community is deleted here too;
+// in use, the default voice takes its place.
+async function forgetRemoved($: EngineInterface, names: readonly string[]) {
+  for (const name of names) {
+    if ((await $.store.get(`voice:${name}`)) === undefined && !samplesCache.has(`voice:${name}`)) continue
+    await $.store.delete(`voice:${name}`)
+    samplesCache.delete(`voice:${name}`)
+    downloaded.delete(name)
+    for (const key of pitchedCache.keys()) if (key.startsWith(`${name}:`)) pitchedCache.delete(key)
+
+    if (settings.voice === name) {
+      settings.voice = DEFAULTS.voice
+      await save($)
+      $.ui.toast(`Blip: the voice ${name} was removed from the community, back to ${DEFAULTS.voice}.`)
+    }
+  }
 }
 
 // Loads a community voice into memory: from the store when it was installed
@@ -954,6 +973,8 @@ export const register: Register = on => {
       const isStored = (await $.store.get(`voice:${settings.voice}`)) !== undefined
       const isLoaded = isStored && (await loadVoice($, settings.voice).catch(() => false))
       if (!isLoaded) settings.voice = DEFAULTS.voice
+      // Still listed? A removed voice is dropped, in the background.
+      else void catalogOf($).catch(() => {})
     }
     await $.command.register({
       name: 'blip',

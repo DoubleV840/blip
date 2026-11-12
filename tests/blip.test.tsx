@@ -281,3 +281,20 @@ test('/blip share points to the submission form', async ($, on) => {
 
   expect((await blip($, 'share')).text).toContain('issues/new?template=submit-voice.yml')
 })
+
+test('a voice removed from the community is deleted, and the default takes its place', async ($, on) => {
+  const { store, clock } = engine(on, { settings: { voice: 'bloop' }, 'voice:bloop': { base64: tone() } })
+  on('store.delete', (_, e) => {
+    store.delete(e.key)
+    return { value: undefined }
+  })
+  on('http.fetch', () => ({
+    value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ voices: [], removed: ['bloop'] }) },
+  }))
+  await $.session.start(START)
+
+  expect((await blip($, 'voices')).text).toContain('None yet')
+  await clock.advance(0) // the check the session started in the background
+  expect(store.has('voice:bloop')).toBe(false)
+  expect(store.get('settings')).toMatchObject({ voice: 'classic' })
+})
