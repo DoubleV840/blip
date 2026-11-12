@@ -1,0 +1,16 @@
+{
+  "name": "blip",
+  "owner": {
+    "name": "DoubleV840"
+  },
+  "metadata": {
+    "description": "Blip: RPG-style text sounds for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "blip",
+      "source": "./",
+      "description": "RPG-style text sounds for Claude Code: every line Claude writes blips like a video game dialogue box."
+    }
+  ]
+}

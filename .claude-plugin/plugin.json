@@ -1,0 +1,21 @@
+{
+  "name": "blip",
+  "version": "0.1.0",
+  "description": "RPG-style text sounds for Claude Code: every line Claude writes blips like a video game dialogue box.",
+  "author": {
+    "name": "DoubleV840"
+  },
+  "license": "MIT",
+  "keywords": [
+    "sound",
+    "audio",
+    "rpg",
+    "retro",
+    "typewriter",
+    "fun"
+  ],
+  "icon": "./.claude-plugin/icon.png",
+  "homepage": "https://github.com/DoubleV840/blip",
+  "repository": "https://github.com/DoubleV840/blip",
+  "types": "./types/index.d.ts"
+}
