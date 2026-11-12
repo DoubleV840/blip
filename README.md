@@ -29,6 +29,8 @@ In Claude Code:
 
 Then ask Claude anything, and listen.
 
+To get new versions on their own: `/plugin` → **Marketplaces** → **blip** → **Enable auto-update**. Or update by hand with `claude plugin update blip@blip`.
+
 ## Community voices
 
 Anyone can give Blip a new voice, and everyone can use it.

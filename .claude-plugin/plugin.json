@@ -1,6 +1,5 @@
 {
   "name": "blip",
-  "version": "0.1.0",
   "description": "RPG-style text sounds for Claude Code: every line Claude writes blips like a video game dialogue box.",
   "author": {
     "name": "DoubleV840"
