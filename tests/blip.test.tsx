@@ -190,7 +190,7 @@ test('without the typewriter, streamed text blips as it streams', async ($, on) 
   expect(played).toHaveLength(1)
   await clock.advance(200)
   expect(played).toHaveLength(5)
-  expect(played[0]?.clip).toEqual({ asset: expect.stringMatching(/^sounds\/classic\/0_\d+\.wav$/) })
+  expect(played[0]?.clip).toEqual({ asset: expect.stringMatching(/^sounds\/soft\/0_\d+\.wav$/) })
 })
 
 test('off, and subagents, stay silent', async ($, on) => {
@@ -296,7 +296,7 @@ test('a voice removed from the community is deleted, and the default takes its p
   expect((await blip($, 'voices')).text).toContain('None yet')
   await clock.advance(0) // the check the session started in the background
   expect(store.has('voice:bloop')).toBe(false)
-  expect(store.get('settings')).toMatchObject({ voice: 'classic' })
+  expect(store.get('settings')).toMatchObject({ voice: 'soft' })
 })
 
 test('/blip report links the form for a community voice, never a built-in one', async ($, on) => {

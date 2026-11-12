@@ -44,7 +44,7 @@ Send a message to skip the rest of a reply, like in a game.
 
 ## Voices
 
-`classic` · `nes` · `soft` · `bubble` · `typewriter` · `robot` · `deep` · `chirp` · `critter`
+`soft` (default) · `classic` · `nes` · `bubble` · `typewriter` · `robot` · `deep` · `chirp` · `critter`
 
 More from the community on **[blip.ivwi.fr](https://blip.ivwi.fr)**: listen, then `/blip voice <name>` installs one.
 

@@ -67,7 +67,7 @@ const DEFAULTS: Settings = {
   enabled: true,
   typewriter: true,
   speed: 'normal',
-  voice: 'classic',
+  voice: 'soft',
   volume: 50,
   pitch: 0,
   thinking: false,
@@ -418,7 +418,7 @@ function noteFor(letter: string, shift: number, voiceName = settings.voice): { c
 
   const builtIn = voiceNamed(voiceName)
   const isCommunity = builtIn === undefined && samplesCache.has(`voice:${voiceName}`)
-  const voice = builtIn ?? VOICES[0]!
+  const voice = builtIn ?? voiceNamed(DEFAULTS.voice) ?? VOICES[0]!
   const spread = isCommunity ? 4 : voice.spread
   const lower = letter.toLowerCase()
   const code = lower.codePointAt(0) ?? 0
