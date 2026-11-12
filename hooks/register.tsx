@@ -865,7 +865,7 @@ async function run($: EngineInterface, args: string): Promise<string> {
         'Share your own voice with everyone:',
         '',
         '1. Make one short sound, under half a second, that is yours (or CC0).',
-        '2. Zip the .wav file.',
+        '2. Zip it: .wav, .mp3, .m4a, .ogg, .flac… any audio file works.',
         `3. Drop the zip in this form: ${SHARE_URL}`,
         '',
         `Once approved, it shows on ${SITE_URL} and in everyone's \`/blip voice\` menu.`,
