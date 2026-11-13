@@ -39,7 +39,7 @@ Anyone can give Blip a new voice, and everyone can use it.
 | --- | --- |
 | 🎧 **Listen** | Every voice plays on **[blip.ivwi.fr](https://blip.ivwi.fr)**, with search and themes. |
 | ⬇️ **Install** | `/blip voice <name>` in Claude Code, or pick one in the `/blip voice` menu. |
-| 🎤 **Share yours** | One short sound you made (`.wav`, `.mp3`, `.m4a`…), zipped, in [the form](https://github.com/DoubleV840/blip-voices/issues/new?template=submit-voice.yml), or type `/blip share`. Checked automatically, live within minutes. |
+| 🎤 **Share yours** | One short sound you made, any format (`.mp3`, `.wav`, `.m4a`, `.ogg`…): drop it on [the site](https://blip.ivwi.fr/#share), or type `/blip share`. Checked automatically, live within minutes. |
 | 🚩 **Report** | `/blip report <name>`: three reports remove a voice, everywhere. |
 
 ## Commands

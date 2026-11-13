@@ -990,8 +990,11 @@ async function run($: EngineInterface, args: string): Promise<string> {
         'Share your own voice with everyone:',
         '',
         '1. Make one short sound, under half a second, that is yours (or CC0).',
-        '2. Zip it: .wav, .mp3, .m4a, .ogg, .flac… any sound file, no videos.',
-        `3. Drop the zip in this form: ${SHARE_URL}`,
+        `2. Drop it on ${SITE_URL}/#share, whatever its format (.mp3, .wav, .m4a, .ogg, .flac…): you hear it as Blip will, and save it as a .wav.`,
+        '3. Drag that .wav into the form the site opens.',
+        '',
+        `Already a .mp3 or .wav? Straight to the form: ${SHARE_URL}`,
+        ...(settings.voice === CUSTOM && settings.custom ? [`Your custom sound is \`${settings.custom}\`.`] : []),
         '',
         `It is checked automatically and goes live within minutes on ${SITE_URL} and in everyone's \`/blip voice\` menu.`,
       ].join('\n')
