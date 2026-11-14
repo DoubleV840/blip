@@ -15,7 +15,7 @@ Replies type out letter by letter, with a blip for every letter.
 **Make Blip yours: every voice can be one the community made.**
 
 [![Browse the voices](https://img.shields.io/badge/%F0%9F%8E%A7_Browse_the_voices-blip.ivwi.fr-E07A4F?style=for-the-badge)](https://blip.ivwi.fr)
-[![Share your voice](https://img.shields.io/badge/%F0%9F%8E%A4_Share_your_voice-one_short_sound-262447?style=for-the-badge)](https://github.com/DoubleV840/blip-voices/issues/new?template=submit-voice.yml)
+[![Share your voice](https://img.shields.io/badge/%F0%9F%8E%A4_Share_your_voice-one_short_sound-262447?style=for-the-badge)](https://blip.ivwi.fr/#share)
 
 </div>
 
@@ -39,7 +39,7 @@ Anyone can give Blip a new voice, and everyone can use it.
 | --- | --- |
 | 🎧 **Listen** | Every voice plays on **[blip.ivwi.fr](https://blip.ivwi.fr)**, with search and themes. |
 | ⬇️ **Install** | `/blip voice <name>` in Claude Code, or pick one in the `/blip voice` menu. |
-| 🎤 **Share yours** | One short sound you made, any format (`.mp3`, `.wav`, `.m4a`, `.ogg`…): drop it on [the site](https://blip.ivwi.fr/#share), or type `/blip share`. Checked automatically, live within minutes. |
+| 🎤 **Share yours** | One short sound you made, any format (`.mp3`, `.wav`, `.m4a`, `.ogg`…): drop it on [the site](https://blip.ivwi.fr/#share) and share it, no account needed. Checked automatically, live in about a minute. |
 | 🚩 **Report** | `/blip report <name>`: three reports remove a voice, everywhere. |
 
 ## Commands

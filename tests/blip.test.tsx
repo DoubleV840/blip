@@ -281,11 +281,14 @@ test('a community voice installs by name and is kept for the next session', asyn
   expect((await blip($, 'voice nope')).text).toContain('No voice named `nope`')
 })
 
-test('/blip share points to the submission form', async ($, on) => {
+test('/blip share points to the site, and to the GitHub form', async ($, on) => {
   engine(on)
   await $.session.start(START)
 
-  expect((await blip($, 'share')).text).toContain('issues/new?template=submit-voice.yml')
+  const { text } = await blip($, 'share')
+  expect(text).toContain('https://blip.ivwi.fr/#share')
+  expect(text).toContain('No account needed')
+  expect(text).toContain('issues/new?template=submit-voice.yml')
 })
 
 test('a voice removed from the community is deleted, and the default takes its place', async ($, on) => {
